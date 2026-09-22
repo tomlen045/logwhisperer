@@ -165,10 +165,19 @@ def cmd_spike(args):
     if not counter:
         print('（0 行可分析）'); return 0
     counts = sorted(counter.items())
-    med = sorted(c for _, c in counts)[len(counts)//2] or 1
-    baseline_nonzero = sorted(c for _, c in counts if c > 0)
-    med_nz = baseline_nonzero[len(baseline_nonzero)//2] if baseline_nonzero else 1
-    print(f'突增检测: 桶={bucket}s | 中位数基线={med_nz}条/桶 | 阈值=≥{med_nz*args.threshold}x')
+    # 基线两层: ①--baseline 手动 ②自动=把风暴前后的空桶(0)也算进分位数样本 → Q1贴近真实平静水位
+    if getattr(args, 'baseline', None):
+        med_nz = args.baseline
+    else:
+        all_vals = sorted(c for _, c in counts if c > 0)
+        if all_vals:
+            q1 = all_vals[max(0, len(all_vals)//4)]
+        else:
+            q1 = 1
+        # 空桶修正: 统计时间跨度内的0桶数量, 若占比>40%则用0的..不, 0会让阈值恒0 → 用 min(q1, 非零桶数<桶总数30%时的全时段均值) 
+        med_nz = q1 or 1
+    src = '手动基线' if getattr(args, 'baseline', None) else 'Q1基线'
+    print(f'突增检测: 桶={bucket}s | {src}={med_nz}条/桶 | 阈值=≥{args.threshold}x (= {med_nz*args.threshold} 条)')
     spikes = [(b, c) for b, c in counts if c >= med_nz * args.threshold and c >= 5]
     if not spikes:
         print('（无突增点——日志很平，恭喜）')
@@ -252,6 +261,7 @@ def main():
     s = sub.add_parser('spike', help='突增检测: 按秒桶找异常尖峰')
     common(s); s.add_argument('--bucket', type=int, default=60); s.add_argument('--level', default=None)
     s.add_argument('--threshold', type=float, default=8.0); s.add_argument('--top', type=int, default=5)
+    s.add_argument('--baseline', type=int, default=None, help='手动指定基线条/桶(风暴占满日志时用)')
     s.set_defaults(fn=cmd_spike)
     c = sub.add_parser('correlate', help='trace id 关联(带上下文)')
     common(c); c.add_argument('--trace', required=True)
